@@ -22,14 +22,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/golang/glog"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/util/mount"
-	kstrings "k8s.io/kubernetes/pkg/util/strings"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/util"
 	"k8s.io/kubernetes/pkg/volume/util/volumepathhandler"
+	utilstrings "k8s.io/utils/strings"
 )
 
 var _ volume.BlockVolumePlugin = &vsphereVolumePlugin{}
@@ -40,10 +40,10 @@ func (plugin *vsphereVolumePlugin) ConstructBlockVolumeSpec(podUID types.UID, vo
 	blkUtil := volumepathhandler.NewBlockVolumePathHandler()
 	globalMapPathUUID, err := blkUtil.FindGlobalMapPathUUIDFromPod(pluginDir, mapPath, podUID)
 	if err != nil {
-		glog.Errorf("Failed to find GlobalMapPathUUID from Pod: %s with error: %+v", podUID, err)
+		klog.Errorf("Failed to find GlobalMapPathUUID from Pod: %s with error: %+v", podUID, err)
 		return nil, err
 	}
-	glog.V(5).Infof("globalMapPathUUID: %v", globalMapPathUUID)
+	klog.V(5).Infof("globalMapPathUUID: %v", globalMapPathUUID)
 	globalMapPath := filepath.Dir(globalMapPathUUID)
 	if len(globalMapPath) <= 1 {
 		return nil, fmt.Errorf("failed to get volume plugin information from globalMapPathUUID: %v", globalMapPathUUID)
@@ -88,7 +88,7 @@ func (plugin *vsphereVolumePlugin) NewBlockVolumeMapper(spec *volume.Spec, pod *
 func (plugin *vsphereVolumePlugin) newBlockVolumeMapperInternal(spec *volume.Spec, podUID types.UID, manager vdManager, mounter mount.Interface) (volume.BlockVolumeMapper, error) {
 	volumeSource, _, err := getVolumeSource(spec)
 	if err != nil {
-		glog.Errorf("Failed to get Volume source from volume Spec: %+v with error: %+v", *spec, err)
+		klog.Errorf("Failed to get Volume source from volume Spec: %+v with error: %+v", *spec, err)
 		return nil, err
 	}
 	volPath := volumeSource.VolumePath
@@ -157,5 +157,5 @@ func (v *vsphereVolume) GetGlobalMapPath(spec *volume.Spec) (string, error) {
 }
 
 func (v *vsphereVolume) GetPodDeviceMapPath() (string, string) {
-	return v.plugin.host.GetPodVolumeDeviceDir(v.podUID, kstrings.EscapeQualifiedNameForDisk(vsphereVolumePluginName)), v.volName
+	return v.plugin.host.GetPodVolumeDeviceDir(v.podUID, utilstrings.EscapeQualifiedName(vsphereVolumePluginName)), v.volName
 }

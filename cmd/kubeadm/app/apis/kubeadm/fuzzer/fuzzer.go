@@ -18,7 +18,6 @@ package fuzzer
 
 import (
 	fuzz "github.com/google/gofuzz"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
@@ -31,9 +30,8 @@ func Funcs(codecs runtimeserializer.CodecFactory) []interface{} {
 	return []interface{}{
 		fuzzInitConfiguration,
 		fuzzClusterConfiguration,
-		fuzzAuditPolicyConfiguration,
 		fuzzComponentConfigs,
-		fuzzNodeRegistration,
+		fuzzDNS,
 		fuzzLocalEtcd,
 		fuzzNetworking,
 		fuzzJoinConfiguration,
@@ -55,9 +53,8 @@ func fuzzInitConfiguration(obj *kubeadm.InitConfiguration, c fuzz.Continue) {
 				Duration: constants.DefaultControlPlaneTimeout,
 			},
 		},
-		AuditPolicyConfiguration: kubeadm.AuditPolicyConfiguration{
-			LogDir:    constants.StaticPodAuditPolicyLogDir,
-			LogMaxAge: &v1beta1.DefaultAuditPolicyLogMaxAge,
+		DNS: kubeadm.DNS{
+			Type: kubeadm.CoreDNS,
 		},
 		CertificatesDir: v1beta1.DefaultCertificatesDir,
 		ClusterName:     v1beta1.DefaultClusterName,
@@ -86,13 +83,6 @@ func fuzzInitConfiguration(obj *kubeadm.InitConfiguration, c fuzz.Continue) {
 	}
 }
 
-func fuzzNodeRegistration(obj *kubeadm.NodeRegistrationOptions, c fuzz.Continue) {
-	c.FuzzNoCustom(obj)
-
-	// Pinning values for fields that get defaults if fuzz value is empty string or nil (thus making the round trip test fail)
-	obj.CRISocket = "foo"
-}
-
 func fuzzClusterConfiguration(obj *kubeadm.ClusterConfiguration, c fuzz.Continue) {
 	c.FuzzNoCustom(obj)
 
@@ -107,12 +97,11 @@ func fuzzClusterConfiguration(obj *kubeadm.ClusterConfiguration, c fuzz.Continue
 	}
 }
 
-func fuzzAuditPolicyConfiguration(obj *kubeadm.AuditPolicyConfiguration, c fuzz.Continue) {
+func fuzzDNS(obj *kubeadm.DNS, c fuzz.Continue) {
 	c.FuzzNoCustom(obj)
 
-	// Pinning values for fields that get defaults if fuzz value is empty string or nil (thus making the round trip test fail)
-	obj.LogDir = "foo"
-	obj.LogMaxAge = new(int32)
+	// Pinning values for fields that get defaults if fuzz value is empty string or nil
+	obj.Type = kubeadm.CoreDNS
 }
 
 func fuzzComponentConfigs(obj *kubeadm.ComponentConfigs, c fuzz.Continue) {
@@ -140,7 +129,6 @@ func fuzzJoinConfiguration(obj *kubeadm.JoinConfiguration, c fuzz.Continue) {
 
 	// Pinning values for fields that get defaults if fuzz value is empty string or nil (thus making the round trip test fail)
 	obj.CACertPath = "foo"
-	obj.ClusterName = "bar"
 	obj.Discovery = kubeadm.Discovery{
 		BootstrapToken:    &kubeadm.BootstrapTokenDiscovery{Token: "baz"},
 		TLSBootstrapToken: "qux",
