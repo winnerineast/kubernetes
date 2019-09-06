@@ -43,7 +43,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/runtime/serializer/streaming"
 	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/diff"
@@ -283,7 +282,7 @@ func defaultContentConfig() ContentConfig {
 	return ContentConfig{
 		ContentType:          "application/json",
 		GroupVersion:         &gvCopy,
-		NegotiatedSerializer: serializer.DirectCodecFactory{CodecFactory: scheme.Codecs},
+		NegotiatedSerializer: scheme.Codecs.WithoutConversion(),
 	}
 }
 
@@ -1441,15 +1440,20 @@ func BenchmarkCheckRetryClosesBody(b *testing.B) {
 	defer testServer.Close()
 
 	c := testRESTClient(b, testServer)
-	r := c.Verb("POST").
-		Prefix("foo", "bar").
-		Suffix("baz").
-		Timeout(time.Second).
-		Body([]byte(strings.Repeat("abcd", 1000)))
 
+	requests := make([]*Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
-		if _, err := r.DoRaw(); err != nil {
-			b.Fatalf("Unexpected error: %v %#v", err, err)
+		requests = append(requests, c.Verb("POST").
+			Prefix("foo", "bar").
+			Suffix("baz").
+			Timeout(time.Second).
+			Body([]byte(strings.Repeat("abcd", 1000))))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := requests[i].DoRaw(); err != nil {
+			b.Fatalf("Unexpected error (%d/%d): %v", i, b.N, err)
 		}
 	}
 }

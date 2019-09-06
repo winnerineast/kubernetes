@@ -25,13 +25,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	kuberuntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	clientsetscheme "k8s.io/client-go/kubernetes/scheme"
 	core "k8s.io/client-go/testing"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
-	api "k8s.io/kubernetes/pkg/apis/core"
 )
 
 func TestCreateServiceAccount(t *testing.T) {
@@ -47,7 +46,7 @@ func TestCreateServiceAccount(t *testing.T) {
 		},
 		{
 			"duplication errors should be ignored",
-			apierrors.NewAlreadyExists(api.Resource(""), ""),
+			apierrors.NewAlreadyExists(schema.GroupResource{}, ""),
 			false,
 		},
 		{
@@ -190,7 +189,7 @@ func TestTranslateStubDomainKubeDNSToCoreDNS(t *testing.T) {
 		expectTwo string
 	}{
 		{
-			name: "valid call 1",
+			name: "valid call with multiple IPs",
 			configMap: &v1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "kube-dns",
@@ -243,7 +242,7 @@ func TestTranslateStubDomainKubeDNSToCoreDNS(t *testing.T) {
 			expectOne: "",
 		},
 		{
-			name: "valid call 2",
+			name: "valid call",
 			configMap: &v1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "kube-dns",
@@ -285,6 +284,64 @@ func TestTranslateStubDomainKubeDNSToCoreDNS(t *testing.T) {
     }`,
 		},
 		{
+			name: "If Hostname present: Omit Hostname",
+			configMap: &v1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "kube-dns",
+					Namespace: "kube-system",
+				},
+				Data: map[string]string{
+					"stubDomains":         `{"bar.com" : ["1.2.3.4:5300","service.consul"], "my.cluster.local" : ["2.3.4.5"], "foo.com" : ["service.consul"]}`,
+					"upstreamNameservers": `["8.8.8.8", "8.8.4.4"]`,
+				},
+			},
+
+			expectOne: `
+    bar.com:53 {
+       errors
+       cache 30
+       loop
+       forward . 1.2.3.4:5300
+    }
+    
+    my.cluster.local:53 {
+       errors
+       cache 30
+       loop
+       forward . 2.3.4.5
+    }`,
+			expectTwo: `
+    my.cluster.local:53 {
+       errors
+       cache 30
+       loop
+       forward . 2.3.4.5
+    }
+    
+    bar.com:53 {
+       errors
+       cache 30
+       loop
+       forward . 1.2.3.4:5300
+    }`,
+		},
+		{
+			name: "All hostname: return empty",
+			configMap: &v1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "kube-dns",
+					Namespace: "kube-system",
+				},
+				Data: map[string]string{
+					"stubDomains":         `{"foo.com" : ["service.consul"], "my.cluster.local" : ["ns.foo.com"]}`,
+					"upstreamNameservers": `["8.8.8.8", "8.8.4.4"]`,
+				},
+			},
+
+			expectOne: "",
+			expectTwo: "",
+		},
+		{
 			name: "missing stubDomains",
 			configMap: &v1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
@@ -305,7 +362,7 @@ func TestTranslateStubDomainKubeDNSToCoreDNS(t *testing.T) {
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
-			if !strings.Contains(out, testCase.expectOne) && !strings.Contains(out, testCase.expectTwo) {
+			if !strings.EqualFold(out, testCase.expectOne) && !strings.EqualFold(out, testCase.expectTwo) {
 				t.Errorf("expected to find %q or %q in output: %q", testCase.expectOne, testCase.expectTwo, out)
 			}
 		})
@@ -358,14 +415,56 @@ func TestTranslateUpstreamKubeDNSToCoreDNS(t *testing.T) {
 
 			expect: "8.8.8.8 8.8.4.4",
 		},
+		{
+			name: "Hostname present: expect NameServer to omit the hostname",
+			configMap: &v1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "kubedns",
+					Namespace: "kube-system",
+				},
+				Data: map[string]string{
+					"upstreamNameservers": `["service.consul", "ns.foo.com", "8.8.4.4", "ns.moo.com", "ns.bar.com"]`,
+				},
+			},
+
+			expect: "8.8.4.4",
+		},
+		{
+			name: "All hostnames: return empty",
+			configMap: &v1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "kube-dns",
+					Namespace: "kube-system",
+				},
+				Data: map[string]string{
+					"upstreamNameservers": `["service.consul", "ns.foo.com"]`,
+				},
+			},
+
+			expect: "",
+		},
+		{
+			name: "IPv6: expect list of Name Server IP addresses",
+			configMap: &v1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "kubedns",
+					Namespace: "kube-system",
+				},
+				Data: map[string]string{
+					"upstreamNameservers": `["[2003::1]:53", "8.8.4.4"]`,
+				},
+			},
+
+			expect: "[2003::1]:53 8.8.4.4",
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			out, err := translateUpstreamNameServerOfKubeDNSToUpstreamProxyCoreDNS(kubeDNSUpstreamNameservers, testCase.configMap)
+			out, err := translateUpstreamNameServerOfKubeDNSToUpstreamForwardCoreDNS(kubeDNSUpstreamNameservers, testCase.configMap)
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
-			if !strings.Contains(out, testCase.expect) {
+			if !strings.EqualFold(out, testCase.expect) {
 				t.Errorf("expected to find %q in output: %q", testCase.expect, out)
 			}
 		})
@@ -414,6 +513,7 @@ func TestTranslateFederationKubeDNSToCoreDNS(t *testing.T) {
 			},
 
 			expectOne: "",
+			expectTwo: "",
 		},
 		{
 			name: "missing federations data",
@@ -429,6 +529,7 @@ func TestTranslateFederationKubeDNSToCoreDNS(t *testing.T) {
 			},
 
 			expectOne: "",
+			expectTwo: "",
 		},
 	}
 	for _, testCase := range testCases {
@@ -437,7 +538,7 @@ func TestTranslateFederationKubeDNSToCoreDNS(t *testing.T) {
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
-			if !strings.Contains(out, testCase.expectOne) && !strings.Contains(out, testCase.expectTwo) {
+			if !strings.EqualFold(out, testCase.expectOne) && !strings.EqualFold(out, testCase.expectTwo) {
 				t.Errorf("expected to find %q or %q in output: %q", testCase.expectOne, testCase.expectTwo, out)
 			}
 		})
@@ -467,10 +568,11 @@ func TestDeploymentsHaveSystemClusterCriticalPriorityClassName(t *testing.T) {
 		{
 			name:     "CoreDNSDeployment",
 			manifest: CoreDNSDeployment,
-			data: struct{ DeploymentName, Image, ControlPlaneTaintKey string }{
+			data: struct{ DeploymentName, Image, ControlPlaneTaintKey, CoreDNSConfigMapName string }{
 				DeploymentName:       "foo",
 				Image:                "foo",
 				ControlPlaneTaintKey: "foo",
+				CoreDNSConfigMapName: "foo",
 			},
 		},
 	}
@@ -478,7 +580,7 @@ func TestDeploymentsHaveSystemClusterCriticalPriorityClassName(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			deploymentBytes, _ := kubeadmutil.ParseTemplate(testCase.manifest, testCase.data)
 			deployment := &apps.Deployment{}
-			if err := kuberuntime.DecodeInto(clientsetscheme.Codecs.UniversalDecoder(), deploymentBytes, deployment); err != nil {
+			if err := runtime.DecodeInto(clientsetscheme.Codecs.UniversalDecoder(), deploymentBytes, deployment); err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
 			if deployment.Spec.Template.Spec.PriorityClassName != "system-cluster-critical" {
@@ -486,4 +588,151 @@ func TestDeploymentsHaveSystemClusterCriticalPriorityClassName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateCoreDNSConfigMap(t *testing.T) {
+	tests := []struct {
+		name                 string
+		initialCorefileData  string
+		expectedCorefileData string
+		coreDNSVersion       string
+	}{
+		{
+			name: "Remove Deprecated options",
+			initialCorefileData: `.:53 {
+        errors
+        health
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+           pods insecure
+           upstream
+           fallthrough in-addr.arpa ip6.arpa
+           ttl 30
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf
+        cache 30
+        loop
+        reload
+        loadbalance
+    }`,
+			expectedCorefileData: `.:53 {
+    errors
+    health
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
+        ttl 30
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf
+    cache 30
+    loop
+    reload
+    loadbalance
+    ready
+}
+`,
+			coreDNSVersion: "1.3.1",
+		},
+		{
+			name: "Update proxy plugin to forward plugin",
+			initialCorefileData: `.:53 {
+        errors
+        health
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+           pods insecure
+           upstream
+           fallthrough in-addr.arpa ip6.arpa
+        }
+        prometheus :9153
+        proxy . /etc/resolv.conf
+        k8s_external example.com
+        cache 30
+        loop
+        reload
+        loadbalance
+    }`,
+			expectedCorefileData: `.:53 {
+    errors
+    health
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf
+    k8s_external example.com
+    cache 30
+    loop
+    reload
+    loadbalance
+    ready
+}
+`,
+			coreDNSVersion: "1.3.1",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := createClientAndCoreDNSManifest(t, tc.initialCorefileData, tc.coreDNSVersion)
+			// Get the Corefile and installed CoreDNS version.
+			cm, corefile, currentInstalledCoreDNSVersion, err := GetCoreDNSInfo(client)
+			if err != nil {
+				t.Fatalf("unable to fetch CoreDNS current installed version and ConfigMap.")
+			}
+			err = migrateCoreDNSCorefile(client, cm, corefile, currentInstalledCoreDNSVersion)
+			if err != nil {
+				t.Fatalf("error creating the CoreDNS ConfigMap: %v", err)
+			}
+			migratedConfigMap, _ := client.CoreV1().ConfigMaps(metav1.NamespaceSystem).Get(kubeadmconstants.CoreDNSConfigMap, metav1.GetOptions{})
+			if !strings.EqualFold(migratedConfigMap.Data["Corefile"], tc.expectedCorefileData) {
+				t.Fatalf("expected to get %v, but got %v", tc.expectedCorefileData, migratedConfigMap.Data["Corefile"])
+			}
+		})
+	}
+}
+
+func createClientAndCoreDNSManifest(t *testing.T, corefile, coreDNSVersion string) *clientsetfake.Clientset {
+	client := clientsetfake.NewSimpleClientset()
+	_, err := client.CoreV1().ConfigMaps(metav1.NamespaceSystem).Create(&v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kubeadmconstants.CoreDNSConfigMap,
+			Namespace: metav1.NamespaceSystem,
+		},
+		Data: map[string]string{
+			"Corefile": corefile,
+		},
+	})
+	if err != nil {
+		t.Fatalf("error creating ConfigMap: %v", err)
+	}
+	_, err = client.AppsV1().Deployments(metav1.NamespaceSystem).Create(&apps.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Deployment",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kubeadmconstants.CoreDNSConfigMap,
+			Namespace: metav1.NamespaceSystem,
+			Labels: map[string]string{
+				"k8s-app": "kube-dns",
+			},
+		},
+		Spec: apps.DeploymentSpec{
+			Template: v1.PodTemplateSpec{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Image: "test:" + coreDNSVersion,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("error creating deployment: %v", err)
+	}
+	return client
 }
